@@ -1,0 +1,6 @@
+[submodule "src-tauri/data/salamander"]
+	path = src-tauri/data/salamander
+	url = https://github.com/sfzinstruments/SalamanderGrandPiano.git
+[submodule "src-tauri/data/splendid"]
+	path = src-tauri/data/splendid
+	url = https://github.com/sfzinstruments/SplendidGrandPiano
