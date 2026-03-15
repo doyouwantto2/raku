@@ -1,7 +1,7 @@
 use crate::engine::cache;
 use crate::engine::decoder;
 use crate::error::AudioError;
-use crate::setup::audio::{self, AudioHandle};
+use crate::setup::audio::AudioHandle;
 use crate::setup::config::AppState;
 use crate::storage::logic::CURRENT_INSTRUMENT;
 use tauri::{AppHandle, State};
