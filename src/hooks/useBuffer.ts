@@ -1,6 +1,5 @@
 import { createSignal, onMount, onCleanup } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
-// pianoEvent will be imported here when perform mode scoring is implemented
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -34,32 +33,42 @@ export type SessionStatus =
   | "paused"
   | "finished";
 
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const VISUAL_LEAD_MS = 2000;
+const AUDIO_LEAD_MS = 564;
+
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
-export function useBuffer() {
-  // ── Song list (from scan) ──────────────────────────────────────────────────
+export function useBuffer(
+  onNoteOn?: (midi: number, velocity: number) => void,
+  onNoteOff?: (midi: number) => void,
+) {
+  // ── Song list ──────────────────────────────────────────────────────────────
   const [availableSongs, setAvailableSongs] = createSignal<SongInfo[]>([]);
   const [activeSong, setActiveSong] = createSignal<SongInfo | null>(null);
 
-  // ── Session data — write-once after load, never mutated during playback ────
+  // ── Session data ───────────────────────────────────────────────────────────
   const [allNotes, setAllNotes] = createSignal<MidiNoteMs[]>([]);
-  const [sessionInfo, setSessionInfo] = createSignal<MidiSessionInfo | null>(
-    null,
-  );
+  const [sessionInfo, setSessionInfo] = createSignal<MidiSessionInfo | null>(null);
 
   // ── Loading state ──────────────────────────────────────────────────────────
   const [isLoading, setIsLoading] = createSignal(false);
   const [sessionStatus, setSessionStatus] = createSignal<SessionStatus>("idle");
 
-  // ── Mode — only selectable after loading completes ─────────────────────────
+  // ── Mode ───────────────────────────────────────────────────────────────────
   const [sessionMode, setSessionMode] = createSignal<SessionMode>(null);
 
-  // ── Playback clock ─────────────────────────────────────────────────────────
+  // ── Animation clock (visuals only) ────────────────────────────────────────
   const [currentTime, setCurrentTime] = createSignal(0);
   let sessionStartMs = 0;
   let rafHandle: number | null = null;
 
-  // ── Score (perform mode only) ──────────────────────────────────────────────
+  // ── Audio scheduling ───────────────────────────────────────────────────────
+  let noteTimeouts: ReturnType<typeof setTimeout>[] = [];
+  let pausedAtMs = 0;
+
+  // ── Score ──────────────────────────────────────────────────────────────────
   const [score, setScore] = createSignal(0);
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -80,12 +89,9 @@ export function useBuffer() {
     }
   };
 
-  // ── Load session into RAM ─────────────────────────────────────────────────
-  // Mirrors selectInstrument() in usePiano — one call loads everything into RAM.
-  // After this completes, allNotes is populated and mode buttons are shown.
+  // ── Load session ───────────────────────────────────────────────────────────
 
   const loadSession = async (song: SongInfo) => {
-    // Guard: don't reload the same song, don't start a new load mid-load
     if (isLoading()) return;
     if (activeSong()?.file_path === song.file_path && isReady()) return;
 
@@ -98,14 +104,11 @@ export function useBuffer() {
     resetPlayback();
 
     try {
-      // Step 1: parse MIDI + convert ticks→ms, store in backend RAM
       const info = await invoke<MidiSessionInfo>("load_midi_session", {
         filePath: song.file_path,
       });
       setSessionInfo(info);
 
-      // Step 2: fetch the full note list — this is the only time we call the backend
-      // for note data. After this, allNotes is the source of truth.
       const notes = await invoke<MidiNoteMs[]>("get_session_notes");
       setAllNotes(notes);
 
@@ -124,42 +127,95 @@ export function useBuffer() {
     }
   };
 
-  // ── Mode selection ────────────────────────────────────────────────────────
-  // Only callable when session is ready. Starts the playback clock.
+  // ── Mode selection ─────────────────────────────────────────────────────────
+  // Mode is forwarded to startPlayback so the audio guard can read it
+  // before setSessionMode's signal update has propagated.
 
   const selectMode = (mode: "perform" | "instruct") => {
     if (sessionStatus() !== "ready") return;
     setSessionMode(mode);
-    startPlayback();
+    startPlayback(mode);
   };
 
-  // ── Playback clock ────────────────────────────────────────────────────────
+  // ── Audio scheduler ────────────────────────────────────────────────────────
 
-  const startPlayback = () => {
-    sessionStartMs = performance.now();
-    setCurrentTime(0);
+  const scheduleAudio = (notes: MidiNoteMs[], fromMs: number) => {
+    if (!onNoteOn && !onNoteOff) return;
+
+    cancelAudio();
+
+    for (const note of notes) {
+      const noteOnDelay = note.start_ms - fromMs - AUDIO_LEAD_MS;
+      const noteOffDelay = note.start_ms + note.duration_ms - fromMs - AUDIO_LEAD_MS;
+
+      if (noteOnDelay >= 0) {
+        noteTimeouts.push(
+          setTimeout(() => onNoteOn?.(note.midi, note.velocity), noteOnDelay),
+        );
+      }
+      if (noteOffDelay >= 0) {
+        noteTimeouts.push(
+          setTimeout(() => onNoteOff?.(note.midi), noteOffDelay),
+        );
+      }
+    }
+
+    console.log(
+      `[AUDIO] Scheduled ${noteTimeouts.length} events` +
+      ` (visual_lead=${VISUAL_LEAD_MS}ms, audio_lead=${AUDIO_LEAD_MS}ms, from=${fromMs.toFixed(0)}ms)`,
+    );
+  };
+
+  const cancelAudio = () => {
+    for (const id of noteTimeouts) clearTimeout(id);
+    noteTimeouts = [];
+  };
+
+  // ── Playback controls ──────────────────────────────────────────────────────
+  //
+  // instruct → animation + auto-audio (song plays itself)
+  // perform  → animation only, no auto-audio (user plays the keys)
+
+  const startPlayback = (mode: SessionMode) => {
+    sessionStartMs = performance.now() + VISUAL_LEAD_MS;
+    pausedAtMs = -VISUAL_LEAD_MS;
+    setCurrentTime(-VISUAL_LEAD_MS);
     setSessionStatus("playing");
+
+    if (mode === "instruct") {
+      scheduleAudio(allNotes(), -VISUAL_LEAD_MS);
+    }
+
     tick();
   };
 
   const pausePlayback = () => {
     if (sessionStatus() !== "playing") return;
+    pausedAtMs = currentTime();
+    cancelAudio();
     stopTick();
     setSessionStatus("paused");
   };
 
   const resumePlayback = () => {
     if (sessionStatus() !== "paused") return;
-    // Adjust start time so currentTime continues from where it left off
-    sessionStartMs = performance.now() - currentTime();
+    sessionStartMs = performance.now() - pausedAtMs;
     setSessionStatus("playing");
+
+    // Only reschedule audio in instruct mode
+    if (sessionMode() === "instruct") {
+      scheduleAudio(allNotes(), pausedAtMs);
+    }
+
     tick();
   };
 
   const stopPlayback = () => {
+    cancelAudio();
     stopTick();
     setCurrentTime(0);
     setScore(0);
+    pausedAtMs = 0;
     sessionStartMs = 0;
     setAllNotes([]);
     setSessionInfo(null);
@@ -168,11 +224,15 @@ export function useBuffer() {
   };
 
   const resetPlayback = () => {
+    cancelAudio();
     stopTick();
     setCurrentTime(0);
     setScore(0);
+    pausedAtMs = 0;
     sessionStartMs = 0;
   };
+
+  // ── Animation tick ─────────────────────────────────────────────────────────
 
   const tick = () => {
     rafHandle = requestAnimationFrame(() => {
@@ -199,7 +259,7 @@ export function useBuffer() {
     }
   };
 
-  // ── Clear session ─────────────────────────────────────────────────────────
+  // ── Clear session ──────────────────────────────────────────────────────────
 
   const clearSession = async () => {
     stopPlayback();
@@ -215,39 +275,35 @@ export function useBuffer() {
     }
   };
 
-  // ── Startup ───────────────────────────────────────────────────────────────
+  // ── Startup ────────────────────────────────────────────────────────────────
 
   onMount(() => {
     scanSongs();
   });
 
   onCleanup(() => {
+    cancelAudio();
     stopTick();
   });
 
-  // ── Public API ────────────────────────────────────────────────────────────
+  // ── Public API ─────────────────────────────────────────────────────────────
 
   return {
-    // Song list
     availableSongs,
     activeSong,
     loadSession,
     scanSongs,
 
-    // Session data — passed down to SceneDispatcher / RainLayout
     allNotes,
     sessionInfo,
 
-    // Status
     isLoading,
     sessionStatus,
     isReady,
 
-    // Mode — passed down to BufferContainer for the mode buttons
     sessionMode,
     selectMode,
 
-    // Playback controls
     currentTime,
     startPlayback,
     pausePlayback,
@@ -255,7 +311,6 @@ export function useBuffer() {
     stopPlayback,
     clearSession,
 
-    // Score (perform mode)
     score,
     setScore,
   };

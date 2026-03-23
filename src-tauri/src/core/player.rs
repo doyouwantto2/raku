@@ -48,7 +48,96 @@ pub async fn play_midi_note(
 
     // Debug: Check if sample data is valid
     if data.is_empty() {
-        return Err(format!("Empty sample data for midi={} layer={}", midi_num, layer));
+        return Err(format!(
+            "Empty sample data for midi={} layer={}",
+            midi_num, layer
+        ));
+    }
+
+    let recorded_midi = audio::pitch_to_midi(&key_data.pitch).unwrap_or(key_data.midi_num());
+    let ratio = audio::pitch_ratio(recorded_midi, midi_num);
+
+    if let Ok(mut voices) = handle.active_voices.lock() {
+        voices.push(crate::setup::audio::Voice {
+            data,
+            playhead: 0.0,
+            pitch_ratio: ratio,
+            midi_note: midi_num,
+            is_releasing: false,
+            volume: velocity as f32 / 127.0,
+        });
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn play_note_auto(
+    midi_num: u8,
+    velocity: u8,
+    handle: State<'_, AudioHandle>,
+    _app: AppHandle,
+) -> Result<(), String> {
+    use crate::setup::audio;
+
+    let config_guard = CURRENT_INSTRUMENT.lock().unwrap();
+    let config = config_guard.as_ref().ok_or("No instrument loaded")?;
+
+    let key_data = config
+        .piano_keys
+        .get(&midi_num.to_string())
+        .ok_or_else(|| format!("Note {} not found in piano configuration", midi_num))?;
+
+    let sample_idx: usize = {
+        let mut ranges: Vec<_> = config.general.layers.values().collect();
+        ranges.sort_by_key(|r| r.lovel);
+
+        let matched_layer_name = ranges
+            .iter()
+            .find(|r| velocity >= r.lovel && velocity <= r.hivel)
+            .map(|r| r.name.to_uppercase());
+
+        if let Some(layer_upper) = matched_layer_name {
+            // Find the sample in this key whose layer matches
+            key_data
+                .samples
+                .iter()
+                .position(|s| s.layer.to_uppercase() == layer_upper)
+                .unwrap_or(0)
+        } else {
+            // No range matched — pick the closest layer by velocity distance
+            // instead of silently falling back to index 0.
+            let best = ranges
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, r)| {
+                    let mid = (r.lovel as i16 + r.hivel as i16) / 2;
+                    (velocity as i16 - mid).abs()
+                })
+                .map(|(i, r)| (i, r.name.to_uppercase()));
+
+            if let Some((_, layer_upper)) = best {
+                key_data
+                    .samples
+                    .iter()
+                    .position(|s| s.layer.to_uppercase() == layer_upper)
+                    .unwrap_or(0)
+            } else {
+                0
+            }
+        }
+    };
+
+    // ── Fetch from cache and push voice ───────────────────────────────────────
+
+    let data = cache::get_by_index(midi_num, sample_idx)
+        .ok_or_else(|| format!("Sample not cached: midi={} idx={}", midi_num, sample_idx))?;
+
+    if data.is_empty() {
+        return Err(format!(
+            "Empty sample: midi={} idx={}",
+            midi_num, sample_idx
+        ));
     }
 
     let recorded_midi = audio::pitch_to_midi(&key_data.pitch).unwrap_or(key_data.midi_num());

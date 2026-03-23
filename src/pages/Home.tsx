@@ -11,7 +11,14 @@ const OCTAVE_BOUNDARIES_PCT = getOctaveBoundariesPct();
 
 export default function Home() {
   const piano = usePiano();
-  const buffer = useBuffer();
+
+  // Pass piano's raw note callbacks into useBuffer so the audio scheduler
+  // can fire play_midi_note / stop_midi_note at the exact right millisecond
+  // using setTimeout — completely independent of the animation clock.
+  const buffer = useBuffer(
+    (midi, velocity) => piano.noteOnRaw(midi, velocity),
+    (midi) => piano.noteOff(midi),
+  );
 
   const onPauseResume = () => {
     if (buffer.sessionStatus() === "playing") buffer.pausePlayback();
@@ -50,12 +57,6 @@ export default function Home() {
       />
 
       <div class="flex flex-col flex-1 overflow-hidden relative">
-        {/* ── Octave boundary lines ─────────────────────────────────────────
-            Rendered at the stage level so they span the full height:
-            from the top of the scene all the way through the buffer strip.
-            Percentage positions come from pianoLayout.ts — no measuring needed.
-            pointer-events: none so they never block piano/scene interaction.
-        ──────────────────────────────────────────────────────────────────── */}
         <Show
           when={
             buffer.sessionStatus() !== "idle" &&
@@ -79,6 +80,8 @@ export default function Home() {
             )}
           </For>
         </Show>
+
+        {/* SceneDispatcher is purely visual — no audio callbacks needed here */}
         <SceneDispatcher
           allNotes={buffer.allNotes}
           currentTime={buffer.currentTime}

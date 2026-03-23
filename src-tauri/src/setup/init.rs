@@ -1,9 +1,9 @@
 use crate::core;
-use crate::storage::handler::FileHandler;
 use crate::error::AudioError;
 use crate::setup::audio;
 use crate::setup::config::AppState;
 use crate::state;
+use crate::storage::handler::FileHandler;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -15,11 +15,10 @@ pub fn run() -> Result<(), AudioError> {
         Err(e) => eprintln!("[INIT] Cannot resolve instruments dir: {}", e),
     }
 
-    let file_handler = Arc::new(RwLock::new(
-    FileHandler::new().map_err(|e| AudioError::InstrumentError(format!("Failed to initialize FileHandler: {}", e)))?
-));
+    let file_handler = Arc::new(RwLock::new(FileHandler::new().map_err(|e| {
+        AudioError::InstrumentError(format!("Failed to initialize FileHandler: {}", e))
+    })?));
 
-    // Create initial app state
     let app_state = AppState::default();
 
     tauri::Builder::default()
@@ -29,6 +28,7 @@ pub fn run() -> Result<(), AudioError> {
         .invoke_handler(tauri::generate_handler![
             core::player::play_midi_note,
             core::player::stop_midi_note,
+            core::player::play_note_auto, // ← new: velocity-aware auto play
             core::player::load_instrument,
             core::player::get_available_instruments,
             core::player::get_available_instruments_files,
@@ -40,16 +40,13 @@ pub fn run() -> Result<(), AudioError> {
             core::visualizer::load_midi_session,
             core::visualizer::get_session_notes,
             core::visualizer::clear_session,
-            // CRUD operations from manager
             core::manager::create_instrument,
             core::manager::delete_instrument,
             core::manager::create_song,
             core::manager::delete_song,
             core::manager::get_file_metadata,
         ])
-        .setup(|_app| {
-            Ok(())
-        })
+        .setup(|_app| Ok(()))
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 

@@ -143,21 +143,21 @@ export function usePiano() {
     try {
       setIsScanning(true);
       console.log("[INSTRUMENTS] Starting scan...");
-      
+
       // Add a small delay to make loading visible
       await new Promise(resolve => setTimeout(resolve, 500));
-      
+
       const instruments = await invoke<InstrumentInfo[]>(
         "get_available_instruments",
       );
-      
+
       console.log(`[INSTRUMENTS] Found ${instruments.length} instruments`);
-      
+
       // Add another small delay
       await new Promise(resolve => setTimeout(resolve, 300));
-      
+
       setAvailableInstruments(instruments);
-      
+
       setIsScanning(false);
       console.log("[INSTRUMENTS] Scan complete");
       return instruments;
@@ -170,7 +170,7 @@ export function usePiano() {
 
   const selectInstrument = async (folder: string) => {
     console.log("[SELECT] Instrument selection started for:", folder);
-    
+
     if (activeFolder() === folder) {
       console.log("[SELECT] Already active, skipping");
       return;
@@ -198,7 +198,7 @@ export function usePiano() {
 
     try {
       console.log("[SELECT] Calling load_instrument backend command");
-      
+
       // Listen for real progress events from backend
       const unlisten = await listen("load_progress", (event) => {
         const { progress, loaded, total, status } = event.payload as {
@@ -212,13 +212,13 @@ export function usePiano() {
       });
 
       const info = await invoke<InstrumentInfo>("load_instrument", { folder });
-      
+
       // Stop listening for progress events
       unlisten();
-      
+
       console.log("[SELECT] Backend response received:", info);
       applyInstrument(info);
-      
+
       setIsLoading(false);
       setLoadProgress(null);
       console.log("[SELECT] Instrument loaded successfully");
@@ -260,15 +260,19 @@ export function usePiano() {
     }
   };
 
+  const noteOnRaw = (midi: number, _velocity: number) => {
+    noteOn(midi, "right");
+  };
+
   // ── Startup ───────────────────────────────────────────────────────────────────
 
   onMount(async () => {
     // Don't set loading state on startup - just load instruments silently
     console.log("[INIT] Starting app initialization...");
-    
+
     // Load available instruments silently
     await loadAvailableInstruments();
-    
+
     console.log("[INIT] App ready - waiting for user to select instrument");
   });
 
@@ -450,6 +454,7 @@ export function usePiano() {
     activeNotes,
     noteOn,
     noteOff,
+    noteOnRaw,
     availableLayers,
     availableLayerRanges,
     leftLayerIdx,
