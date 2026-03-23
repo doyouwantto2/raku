@@ -36,7 +36,14 @@ export type SessionStatus =
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const VISUAL_LEAD_MS = 2000;
-const AUDIO_LEAD_MS = 564;
+const AUDIO_LEAD_MS = 600;
+
+// Rolling scheduler: how far ahead to schedule at a time.
+// Keeps only ~SCHEDULE_WINDOW_MS worth of timers active at once instead
+// of dumping the entire song's worth of timeouts up front.
+const SCHEDULE_WINDOW_MS = 2000;
+// How often the rolling scheduler refills the window.
+const SCHEDULER_TICK_MS = 200;
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
@@ -44,32 +51,27 @@ export function useBuffer(
   onNoteOn?: (midi: number, velocity: number) => void,
   onNoteOff?: (midi: number) => void,
 ) {
-  // ── Song list ──────────────────────────────────────────────────────────────
   const [availableSongs, setAvailableSongs] = createSignal<SongInfo[]>([]);
   const [activeSong, setActiveSong] = createSignal<SongInfo | null>(null);
-
-  // ── Session data ───────────────────────────────────────────────────────────
   const [allNotes, setAllNotes] = createSignal<MidiNoteMs[]>([]);
   const [sessionInfo, setSessionInfo] = createSignal<MidiSessionInfo | null>(null);
-
-  // ── Loading state ──────────────────────────────────────────────────────────
   const [isLoading, setIsLoading] = createSignal(false);
   const [sessionStatus, setSessionStatus] = createSignal<SessionStatus>("idle");
-
-  // ── Mode ───────────────────────────────────────────────────────────────────
   const [sessionMode, setSessionMode] = createSignal<SessionMode>(null);
-
-  // ── Animation clock (visuals only) ────────────────────────────────────────
   const [currentTime, setCurrentTime] = createSignal(0);
+  const [score, setScore] = createSignal(0);
+
   let sessionStartMs = 0;
   let rafHandle: number | null = null;
-
-  // ── Audio scheduling ───────────────────────────────────────────────────────
-  let noteTimeouts: ReturnType<typeof setTimeout>[] = [];
   let pausedAtMs = 0;
 
-  // ── Score ──────────────────────────────────────────────────────────────────
-  const [score, setScore] = createSignal(0);
+  // ── Rolling audio scheduler state ─────────────────────────────────────────
+  // noteTimeouts: active per-note timers (capped to SCHEDULE_WINDOW_MS ahead)
+  // schedulerHandle: the interval that refills the window
+  // scheduledUpToMs: high-water mark — notes before this have already been scheduled
+  let noteTimeouts: ReturnType<typeof setTimeout>[] = [];
+  let schedulerHandle: ReturnType<typeof setInterval> | null = null;
+  let scheduledUpToMs = 0;
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -108,14 +110,10 @@ export function useBuffer(
         filePath: song.file_path,
       });
       setSessionInfo(info);
-
       const notes = await invoke<MidiNoteMs[]>("get_session_notes");
       setAllNotes(notes);
-
       setSessionStatus("ready");
-      console.log(
-        `[BUFFER] Session ready — ${notes.length} notes, ${info.tempo_bpm.toFixed(1)} BPM`,
-      );
+      console.log(`[BUFFER] Session ready — ${notes.length} notes, ${info.tempo_bpm.toFixed(1)} BPM`);
     } catch (e) {
       console.error("[BUFFER] load error:", e);
       setActiveSong(null);
@@ -128,8 +126,6 @@ export function useBuffer(
   };
 
   // ── Mode selection ─────────────────────────────────────────────────────────
-  // Mode is forwarded to startPlayback so the audio guard can read it
-  // before setSessionMode's signal update has propagated.
 
   const selectMode = (mode: "perform" | "instruct") => {
     if (sessionStatus() !== "ready") return;
@@ -137,14 +133,30 @@ export function useBuffer(
     startPlayback(mode);
   };
 
-  // ── Audio scheduler ────────────────────────────────────────────────────────
+  // ── Rolling audio scheduler ───────────────────────────────────────────────
+  //
+  // Instead of scheduling ALL notes at once (thousands of timers), we keep a
+  // sliding window of at most SCHEDULE_WINDOW_MS worth of pending timers.
+  // A setInterval refills the window every SCHEDULER_TICK_MS.
+  //
+  // `fromMs` = current animation-clock position (may be negative during lead-in).
+  // We only schedule notes whose audio-fire time falls within the next
+  // SCHEDULE_WINDOW_MS from right now.
 
-  const scheduleAudio = (notes: MidiNoteMs[], fromMs: number) => {
+  const scheduleWindow = (notes: MidiNoteMs[], fromMs: number) => {
     if (!onNoteOn && !onNoteOff) return;
 
-    cancelAudio();
+    // Wall-clock "now" corresponds to animation position fromMs.
+    // Audio fires at animation position: note.start_ms - AUDIO_LEAD_MS
+    // Wall-clock delay from now: (note.start_ms - fromMs - AUDIO_LEAD_MS)
+    const windowEnd = scheduledUpToMs + SCHEDULE_WINDOW_MS;
 
     for (const note of notes) {
+      // Skip notes already scheduled or before our cursor
+      if (note.start_ms <= scheduledUpToMs) continue;
+      // Stop once we're past the window
+      if (note.start_ms > windowEnd) break;
+
       const noteOnDelay = note.start_ms - fromMs - AUDIO_LEAD_MS;
       const noteOffDelay = note.start_ms + note.duration_ms - fromMs - AUDIO_LEAD_MS;
 
@@ -160,21 +172,42 @@ export function useBuffer(
       }
     }
 
-    console.log(
-      `[AUDIO] Scheduled ${noteTimeouts.length} events` +
-      ` (visual_lead=${VISUAL_LEAD_MS}ms, audio_lead=${AUDIO_LEAD_MS}ms, from=${fromMs.toFixed(0)}ms)`,
-    );
+    scheduledUpToMs = windowEnd;
   };
 
-  const cancelAudio = () => {
+  const startRollingScheduler = (notes: MidiNoteMs[], fromMs: number) => {
+    stopRollingScheduler();
+
+    // Sort notes by start_ms once so scheduleWindow can break early
+    const sorted = [...notes].sort((a, b) => a.start_ms - b.start_ms);
+
+    // Seed the scheduler cursor at fromMs (negative during lead-in)
+    scheduledUpToMs = fromMs;
+
+    // Fill the first window immediately
+    scheduleWindow(sorted, fromMs);
+
+    // Refill every SCHEDULER_TICK_MS
+    schedulerHandle = setInterval(() => {
+      // Current animation position
+      const animNow = performance.now() - sessionStartMs;
+      // Advance cursor to just behind now so we never miss notes
+      if (animNow > scheduledUpToMs) scheduledUpToMs = animNow;
+      scheduleWindow(sorted, animNow);
+    }, SCHEDULER_TICK_MS);
+  };
+
+  const stopRollingScheduler = () => {
+    if (schedulerHandle !== null) {
+      clearInterval(schedulerHandle);
+      schedulerHandle = null;
+    }
     for (const id of noteTimeouts) clearTimeout(id);
     noteTimeouts = [];
+    scheduledUpToMs = 0;
   };
 
   // ── Playback controls ──────────────────────────────────────────────────────
-  //
-  // instruct → animation + auto-audio (song plays itself)
-  // perform  → animation only, no auto-audio (user plays the keys)
 
   const startPlayback = (mode: SessionMode) => {
     sessionStartMs = performance.now() + VISUAL_LEAD_MS;
@@ -183,7 +216,7 @@ export function useBuffer(
     setSessionStatus("playing");
 
     if (mode === "instruct") {
-      scheduleAudio(allNotes(), -VISUAL_LEAD_MS);
+      startRollingScheduler(allNotes(), -VISUAL_LEAD_MS);
     }
 
     tick();
@@ -192,7 +225,7 @@ export function useBuffer(
   const pausePlayback = () => {
     if (sessionStatus() !== "playing") return;
     pausedAtMs = currentTime();
-    cancelAudio();
+    stopRollingScheduler();
     stopTick();
     setSessionStatus("paused");
   };
@@ -202,16 +235,15 @@ export function useBuffer(
     sessionStartMs = performance.now() - pausedAtMs;
     setSessionStatus("playing");
 
-    // Only reschedule audio in instruct mode
     if (sessionMode() === "instruct") {
-      scheduleAudio(allNotes(), pausedAtMs);
+      startRollingScheduler(allNotes(), pausedAtMs);
     }
 
     tick();
   };
 
   const stopPlayback = () => {
-    cancelAudio();
+    stopRollingScheduler();
     stopTick();
     setCurrentTime(0);
     setScore(0);
@@ -224,7 +256,7 @@ export function useBuffer(
   };
 
   const resetPlayback = () => {
-    cancelAudio();
+    stopRollingScheduler();
     stopTick();
     setCurrentTime(0);
     setScore(0);
@@ -277,41 +309,17 @@ export function useBuffer(
 
   // ── Startup ────────────────────────────────────────────────────────────────
 
-  onMount(() => {
-    scanSongs();
-  });
-
-  onCleanup(() => {
-    cancelAudio();
-    stopTick();
-  });
+  onMount(() => { scanSongs(); });
+  onCleanup(() => { stopRollingScheduler(); stopTick(); });
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
   return {
-    availableSongs,
-    activeSong,
-    loadSession,
-    scanSongs,
-
-    allNotes,
-    sessionInfo,
-
-    isLoading,
-    sessionStatus,
-    isReady,
-
-    sessionMode,
-    selectMode,
-
-    currentTime,
-    startPlayback,
-    pausePlayback,
-    resumePlayback,
-    stopPlayback,
-    clearSession,
-
-    score,
-    setScore,
+    availableSongs, activeSong, loadSession, scanSongs,
+    allNotes, sessionInfo,
+    isLoading, sessionStatus, isReady,
+    sessionMode, selectMode,
+    currentTime, startPlayback, pausePlayback, resumePlayback, stopPlayback, clearSession,
+    score, setScore,
   };
 }
