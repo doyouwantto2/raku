@@ -55,7 +55,7 @@ export default function PianoContainer(props: PianoProps) {
 
   return (
     <div
-      class="fixed w-full select-none"
+      class="fixed bottom-0 w-full select-none"
       style="height: 25vh; min-height: 2rem; max-height: 10rem;"
     >
       <div class="absolute inset-0 flex">
