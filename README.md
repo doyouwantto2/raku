@@ -15,7 +15,7 @@ Every note played doesn't just produce a sound; it renders a specific color and 
 
 | Manual Play Mode | Visualizer (MIDI Auto-play) |
 | :---: | :---: |
-| <img src="./examples/img/swappy-20260324-173943.png" width="400"/> | <img src="./examples/img/swappy-20260324-173910.png" width="400"/> |
+| <img src="./examples/img/swappy-20260324-173943.png" width="400"/> | <img src="./examples/img/swappy-20260324-174920.png.png" width="400"/> |
 | *Clean UI for manual QWERTY/MIDI input.* | *Real-time color rendering based on note frequencies.* |
 
 ---
