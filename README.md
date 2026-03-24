@@ -22,7 +22,7 @@ Every note played doesn't just produce a sound; it renders a specific color and 
 
 ## 🚀 Key Features
 
-* **Dual Input Modes: Play using a standard computer keyboard or external MIDI controller.
+* **Dual Input Modes:** Play using a standard computer keyboard or external MIDI controller.
 * **Low Latency:** Rust backend ensures zero-lag communication between the audio thread and the visual rendering thread.
 
 ---
