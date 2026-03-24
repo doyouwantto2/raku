@@ -2,7 +2,7 @@
 [![Tauri](https://img.shields.io/badge/Tauri-FFC131?style=for-the-badge&logo=Tauri&logoColor=white)]()
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=for-the-badge)]()
 
-**Rakund** is a high-performance, cross-platform piano simulator built with a Rust backend and Tauri frontend.
+**Rakund** is a high-performance, cross-platform piano simulator built with a Rust backend and SolidJS frontend.
 
 Every note played doesn't just produce a sound; it renders a specific color and physical particle on the screen, creating a mathematically precise fusion of audio and visual data.
 
@@ -30,7 +30,7 @@ Every note played doesn't just produce a sound; it renders a specific color and 
 ## 🛠️ Tech Stack
 
 * **Backend:** Rust (Core logic, Audio processing, MIDI parsing).
-* **Frontend:** Tauri (Cross-platform GUI bridging).
+* **Frontend:** SolidJS (Cross-platform GUI bridging).
 
 ---
 
