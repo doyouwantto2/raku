@@ -37,7 +37,7 @@ Every note played doesn't just produce a sound; it renders a specific color and 
 ## 💻 Installation & Build
 
 ### Prerequisites
-Make sure you have [Rust](https://www.rust-lang.org/tools/install) and the [Tauri CLI](https://tauri.app/v1/guides/getting-started/setup/) installed on your system. You should either install [direnv].
+Make sure you have [Rust](https://www.rust-lang.org/tools/install) and the [Tauri CLI](https://tauri.app/v1/guides/getting-started/setup/) installed on your system. You should either install [direnv](https://direnv.net/) and [bun](https://bun.com/).
 
 ### Build Instructions
 
