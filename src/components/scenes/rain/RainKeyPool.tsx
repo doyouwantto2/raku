@@ -24,10 +24,10 @@ interface RainKeyPoolProps {
 
 export default function RainKeyPool(props: RainKeyPoolProps) {
   const [keyPool, setKeyPool] = createSignal<PooledKey[]>([]);
-  
+
   // Pre-create a pool of key components (enough for maximum concurrent notes)
   const MAX_CONCURRENT_KEYS = 128; // One for each MIDI note
-  
+
   // Initialize the key pool
   onMount(() => {
     const pool: PooledKey[] = [];
@@ -55,7 +55,7 @@ export default function RainKeyPool(props: RainKeyPoolProps) {
 
     const handleBlur = () => {
       console.log("[RAIN_POOL] Window blurred - clearing active keys");
-      
+
       // Reset all keys to inactive state
       setKeyPool(pool => pool.map(key => ({
         ...key,
@@ -124,7 +124,7 @@ export default function RainKeyPool(props: RainKeyPoolProps) {
     const updatedPool = keyPool().map((pooledKey, index) => {
       if (index < visibleNotes.length) {
         const visibleNote = visibleNotes[index];
-        
+
         return {
           ...pooledKey,
           note: visibleNote.note,

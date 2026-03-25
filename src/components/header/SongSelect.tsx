@@ -213,7 +213,7 @@ export default function SongSelect(props: SongSelectProps) {
                       <Show when={isPlaying() || isPaused()}>
                         <div class="px-4 pb-3">
                           <button
-                            class="w-full px-3 py-1.5 mt-2 rounded text-xs font-medium bg-zinc-700 hover:bg-zinc-600 text-zinc-300 transition-colors"
+                            class="w-full px py-1.5 mt-2 rounded text-xs font-medium bg-zinc-700 hover:bg-zinc-600 text-zinc-300 transition-colors"
                             onClick={() => {
                               props.onStop();
                               setShowList(false);
