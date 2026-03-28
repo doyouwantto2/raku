@@ -11,7 +11,7 @@ Every note played doesn't just produce a sound; it renders a specific color and 
 ## ✨ Showcase
 
 
-### Interface Preview
+### Preview
 
 | Manual Play Mode | Visualizer |
 | :---: | :---: |
